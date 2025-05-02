@@ -40,6 +40,35 @@ function waitForElement(selector) {
     });
 }
 
+function modifyLine(inputLine){
+    inputLine = inputLine.replaceAll("\"", "");
+    let arr = inputLine.split("*");
+    let output = "";
+    let inside = false;
+    
+    for (let chunk of arr) {
+        if (!inside) {
+            let trimmed = chunk.trim();
+            if (trimmed) {
+                trimmed = '\"' + trimmed + '\"';
+            }
+            let leadingSpaces = chunk.slice(0, chunk.length - chunk.trimStart().length);
+            output += (leadingSpaces + trimmed);
+            
+            let remainingSpaces = chunk.slice(chunk.trimEnd().length, chunk.length);
+            output += remainingSpaces;
+            
+            inside = true;
+        } else {
+            chunk = '*' + chunk + '*';
+            output += chunk;
+            inside = false;
+        }
+    }
+    return output+"\n"
+}
+
+
 // Modify user input before saving (Only if AutoQuote is enabled)
 function modifyUserInput() {
     let userInput = String($('#send_textarea').val()).trim();
@@ -63,33 +92,14 @@ function modifyUserInput() {
         return true;
     }
 
-    userInput = userInput.replaceAll("\"", "");
-    let arr = userInput.split("*");
-    let output = "";
-    let inside = false;
-
-    for (let chunk of arr) {
-        if (!inside) {
-            let trimmed = chunk.trim();
-            if (trimmed) {
-                trimmed = '\"' + trimmed + '\"';
-            }
-            let leadingSpaces = chunk.slice(0, chunk.length - chunk.trimStart().length);
-            output += (leadingSpaces + trimmed);
-
-            let remainingSpaces = chunk.slice(chunk.trimEnd().length, chunk.length);
-            output += remainingSpaces;
-
-            inside = true;
-        } else {
-            chunk = '*' + chunk + '*';
-            output += chunk;
-            inside = false;
-        }
+    let arr = userInput.split("\n");
+    let modifiedInput = "";
+    for (let line of arr){
+        modifiedInput += modifyLine(line);
     }
-
-    $('#send_textarea').val(output);
-    console.debug("Modified User Input: ", output);
+    modifiedInput = modifiedInput.trim();
+    $('#send_textarea').val(modifiedInput);
+    console.debug("Modified User Input: ", modifiedInput);
 
     return true;
 }
@@ -101,7 +111,7 @@ jQuery(async () => {
 
     await loadSettings();
 
-    $("#send_button").on("click", function (e) {
+    $("#send_but").on("click", function (e) {
         const shouldSend = modifyUserInput();
         if (!shouldSend) {
             e.preventDefault();

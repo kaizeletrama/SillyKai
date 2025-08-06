@@ -65,6 +65,11 @@ function modifyLine(inputLine){
             inside = false;
         }
     }
+    // Remove asterisks if the Asterisk toggle is off
+    const asteriskEnabled = $('#asterisk-toggle').is(':checked');
+    if (!asteriskEnabled) {
+        output = output.replaceAll('*', '');
+    }
     return output+"\n"
 }
 

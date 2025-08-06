@@ -247,7 +247,7 @@ function modifyUserInput() {
         extension_settings[extensionName].enabled = newState;
         $('#sillykai-toggle').prop('checked', newState);
 
-        toastr.info(`SillyKai ${newState ? "enabled" : "disabled"}`);
+        toastr.info(`AutoQuote ${newState ? "enabled" : "disabled"}`);
 
         $('#send_textarea').val('');
         return false;
@@ -343,4 +343,5 @@ jQuery(async () => {
         applyMessageColorsToExistingMessages();
     }
 });
+
 

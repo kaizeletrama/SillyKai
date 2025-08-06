@@ -1,11 +1,11 @@
 <div class="example-extension-settings">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>AutoQuote</b>
+            <b>SillyKai</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-            <div class="autoquote-extension_block flex-container"
+            <div class="sillykai-extension_block flex-container"
                 style="display: flex; align-items: center; gap: 8px; padding-left: 5px;">
                 <label class="switch">
                     <input type="checkbox" id="autoquote-toggle">
@@ -13,7 +13,7 @@
                 </label>
                 <span>Toggle AutoQuote on/off</span>
             </div>
-            <div class="autoquote-extension_block flex-container"
+            <div class="sillykai-extension_block flex-container"
                 style="display: flex; align-items: center; gap: 8px; padding-left: 5px; margin-top: 8px;">
                 <label class="switch">
                     <input type="checkbox" id="asterisk-toggle">
@@ -21,19 +21,46 @@
                 </label>
                 <span>Toggle Asterisk on/off</span>
             </div>
-            <div class="autoquote-extension_block flex-container"
-            style="display: flex; align-items: center; gap: 8px; padding-left: 5px; margin-top: 8px; padding-bottom: 200px;">
-            <label class="switch">
-                <input type="checkbox" id="highlight-names-toggle">
-                <span class="slider round"></span>
-            </label>
-            <span>Highlight names</span>
-            <toolcool-color-picker 
-                id="highlight-names-color" 
-                color="#CFCFC5"
-                popup-position="top"
-                style="margin-left: 8px; --tool-cool-color-picker-popup-transform: translateY(-100%);">
-            </toolcool-color-picker>
+            <div class="sillykai-extension_block flex-container"
+                style="display: flex; align-items: center; gap: 8px; padding-left: 5px; margin-top: 8px;">
+                <label class="switch">
+                    <input type="checkbox" id="message-colors-toggle">
+                    <span class="slider round"></span>
+                </label>
+                <span>Message Colors</span>
+            </div>
+            
+            <!-- Message Text Color -->
+            <div class="sillykai-extension_block flex-container"
+                style="display: flex; align-items: center; gap: 8px; padding-left: 25px; margin-top: 8px;">
+                <span style="min-width: 80px;">Text:</span>
+                <toolcool-color-picker 
+                    id="message-text-color" 
+                    color="#ffffff"
+                    popup-position="top">
+                </toolcool-color-picker>
+            </div>
+            
+            <!-- Message Names Color -->
+            <div class="sillykai-extension_block flex-container"
+                style="display: flex; align-items: center; gap: 8px; padding-left: 25px; margin-top: 8px;">
+                <span style="min-width: 80px;">Names:</span>
+                <toolcool-color-picker 
+                    id="message-names-color" 
+                    color="#CFCFC5"
+                    popup-position="top">
+                </toolcool-color-picker>
+            </div>
+            
+            <!-- Message Quotes Color -->
+            <div class="sillykai-extension_block flex-container"
+                style="display: flex; align-items: center; gap: 8px; padding-left: 25px; margin-top: 8px; padding-bottom: 200px;">
+                <span style="min-width: 80px;">Quotes:</span>
+                <toolcool-color-picker 
+                    id="message-quotes-color" 
+                    color="#87CEEB"
+                    popup-position="top">
+                </toolcool-color-picker>
             </div>
         </div>
         <hr class="sysHR" />

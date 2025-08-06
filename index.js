@@ -15,16 +15,78 @@ async function loadSettings() {
     }
 
     await waitForElement('#autoquote-toggle');
+    await waitForElement('#asterisk-toggle');
+    await waitForElement('#highlight-names-toggle');
+    await waitForElement('#highlight-names-color');
 
+    // Default settings for toggles
+    if (typeof extension_settings[extensionName].asteriskEnabled === 'undefined') {
+        extension_settings[extensionName].asteriskEnabled = $('#asterisk-toggle').is(':checked');
+    }
+    if (typeof extension_settings[extensionName].highlightNamesEnabled === 'undefined') {
+        extension_settings[extensionName].highlightNamesEnabled = $('#highlight-names-toggle').is(':checked');
+    }
+    if (typeof extension_settings[extensionName].highlightNamesColor === 'undefined') {
+        extension_settings[extensionName].highlightNamesColor = '#CFCFC5';
+    }
+
+    // Restore toggle states
     $('#autoquote-toggle').prop('checked', extension_settings[extensionName].enabled);
+    $('#asterisk-toggle').prop('checked', extension_settings[extensionName].asteriskEnabled);
+    $('#highlight-names-toggle').prop('checked', extension_settings[extensionName].highlightNamesEnabled);
+    
+    // Set up the Tool Cool Color Picker
+    const colorPicker = document.getElementById('highlight-names-color');
+    if (colorPicker) {
+        colorPicker.color = extension_settings[extensionName].highlightNamesColor;
+        
+        // Listen for color changes with debouncing for better performance
+        let colorChangeTimeout;
+        colorPicker.addEventListener('change', (evt) => {
+            clearTimeout(colorChangeTimeout);
+            colorChangeTimeout = setTimeout(() => {
+                const color = evt.detail.hex;
+                extension_settings[extensionName].highlightNamesColor = color;
+                console.debug("Highlight names color saved:", color);
+                
+                // Apply changes immediately if highlighting is enabled
+                if (extension_settings[extensionName].highlightNamesEnabled) {
+                    applyHighlightingToExistingMessages();
+                }
+            }, 50); // Short debounce for smooth color dragging
+        });
+    }
 
-    // Toast on manual toggle
+    // Save toggle states on change
     $('#autoquote-toggle').on('change', function () {
         const isEnabled = $(this).is(':checked');
         extension_settings[extensionName].enabled = isEnabled;
         console.debug("AutoQuote setting saved:", isEnabled);
-
         toastr.info(`AutoQuote ${isEnabled ? "enabled" : "disabled"}`);
+    });
+
+    $('#asterisk-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].asteriskEnabled = isEnabled;
+        console.debug("Asterisk setting saved:", isEnabled);
+    });
+
+    $('#highlight-names-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].highlightNamesEnabled = isEnabled;
+        console.debug("Highlight names setting saved:", isEnabled);
+        
+        // Immediately apply/remove highlighting
+        if (isEnabled) {
+            applyHighlightingToExistingMessages();
+            setupHighlightNamesObserver();
+        } else {
+            removeHighlightingFromExistingMessages();
+            if (highlightNamesObserver) {
+                highlightNamesObserver.disconnect();
+                highlightNamesObserver = null;
+            }
+        }
     });
 }
 
@@ -66,13 +128,52 @@ function modifyLine(inputLine){
         }
     }
     // Remove asterisks if the Asterisk toggle is off
-    const asteriskEnabled = $('#asterisk-toggle').is(':checked');
+    const asteriskEnabled = extension_settings[extensionName].asteriskEnabled;
     if (!asteriskEnabled) {
         output = output.replaceAll('*', '');
     }
     return output+"\n"
 }
 
+// Apply highlighting to existing messages efficiently
+function applyHighlightingToExistingMessages() {
+    if (!extension_settings[extensionName].highlightNamesEnabled) return;
+    const color = extension_settings[extensionName].highlightNamesColor || '#CFCFC5';
+    
+    // Use requestAnimationFrame for better performance
+    requestAnimationFrame(() => {
+        $('.mes_text p').each(function() {
+            const $p = $(this);
+            // Remove any existing highlighting first
+            $p.find('span[data-autoquote-highlight]').each(function() {
+                const $span = $(this);
+                $span.replaceWith($span.text());
+            });
+            
+            const segments = $p.html().split(/<br\s*\/?>(?![^<]*<)/i);
+            const updatedSegments = segments.map(segment => {
+                return segment.replace(
+                    /^\s*([^:<>"\n]+?):/,
+                    (match, name) => `<span data-autoquote-highlight="true" style="color: ${color};">${name}:</span>`
+                );
+            });
+            $p.html(updatedSegments.join('<br>'));
+        });
+    });
+}
+
+// Remove highlighting from existing messages
+function removeHighlightingFromExistingMessages() {
+    requestAnimationFrame(() => {
+        $('.mes_text p').each(function() {
+            const $p = $(this);
+            $p.find('span[data-autoquote-highlight]').each(function() {
+                const $span = $(this);
+                $span.replaceWith($span.text());
+            });
+        });
+    });
+}
 
 // Modify user input before saving (Only if AutoQuote is enabled)
 function modifyUserInput() {
@@ -109,6 +210,40 @@ function modifyUserInput() {
     return true;
 }
 
+// Highlight names observer logic
+let highlightNamesObserver = null;
+function setupHighlightNamesObserver() {
+    if (highlightNamesObserver) {
+        highlightNamesObserver.disconnect();
+        highlightNamesObserver = null;
+    }
+    if (!extension_settings[extensionName].highlightNamesEnabled) return;
+    const color = extension_settings[extensionName].highlightNamesColor || '#CFCFC5';
+    highlightNamesObserver = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+            mutation.addedNodes.forEach(node => {
+                if (!(node instanceof HTMLElement)) return;
+                const targets = node.matches?.('.mes_text p') ? [node] : node.querySelectorAll?.('.mes_text p');
+                if (!targets) return;
+                targets.forEach(p => {
+                    const segments = p.innerHTML.split(/<br\s*\/?>(?![^<]*<)/i);
+                    const updatedSegments = segments.map(segment => {
+                        return segment.replace(
+                            /^\s*([^:<>"\n]+?):/,
+                            (match, name) => `<span data-autoquote-highlight="true" style="color: ${color};">${name}:</span>`
+                        );
+                    });
+                    p.innerHTML = updatedSegments.join('<br>');
+                });
+            });
+        });
+    });
+    highlightNamesObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+}
+
 // Hook into the send button and textarea
 jQuery(async () => {
     const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
@@ -135,4 +270,12 @@ jQuery(async () => {
             }
         }
     });
+
+    // Initial setup
+    setupHighlightNamesObserver();
+    
+    // Apply highlighting to existing messages on load
+    if (extension_settings[extensionName].highlightNamesEnabled) {
+        applyHighlightingToExistingMessages();
+    }
 });

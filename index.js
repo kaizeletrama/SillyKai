@@ -241,7 +241,7 @@ function modifyUserInput() {
     let userInput = String($('#send_textarea').val()).trim();
 
     // Toggle via command
-    if (userInput === "//sk") {
+    if (userInput === "//aq") {
         const currentState = extension_settings[extensionName].enabled;
         const newState = !currentState;
         extension_settings[extensionName].enabled = newState;
@@ -343,3 +343,4 @@ jQuery(async () => {
         applyMessageColorsToExistingMessages();
     }
 });
+

@@ -1,10 +1,14 @@
-import { extension_settings } from "../../../extensions.js";
+import { extension_settings, getContext } from "../../../extensions.js";
+import { eventSource, event_types, updateMessageBlock, saveSettingsDebounced } from '../../../../script.js';
 
 const extensionName = "SillyKai";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const defaultSettings = {
-    enabled: true // default toggle state
+    enabled: true, // default toggle state
+    postProcessingEnabled: false
 };
+
+
 
 // Shared function for applying name coloring
 function applyNameColoring(html, namesColor) {
@@ -37,6 +41,7 @@ async function loadSettings() {
     await waitForElement('#autoquote-toggle');
     await waitForElement('#asterisk-toggle');
     await waitForElement('#message-colors-toggle');
+    await waitForElement('#postprocessing-toggle');
     await waitForElement('#message-text-color');
     await waitForElement('#message-names-color');
     await waitForElement('#message-quotes-color');
@@ -57,11 +62,16 @@ async function loadSettings() {
     if (typeof extension_settings[extensionName].messageQuotesColor === 'undefined') {
         extension_settings[extensionName].messageQuotesColor = '#87CEEB';
     }
+    if (typeof extension_settings[extensionName].postProcessingEnabled === 'undefined') {
+        extension_settings[extensionName].postProcessingEnabled = $('#postprocessing-toggle').is(':checked');
+    }
 
+    // (no debug logs)
     // Restore toggle states
     $('#autoquote-toggle').prop('checked', extension_settings[extensionName].enabled);
     $('#asterisk-toggle').prop('checked', extension_settings[extensionName].asteriskEnabled);
     $('#message-colors-toggle').prop('checked', extension_settings[extensionName].messageColorsEnabled);
+    $('#postprocessing-toggle').prop('checked', extension_settings[extensionName].postProcessingEnabled);
     
     // Set up the Tool Cool Color Pickers with debouncing
     // Wait for Tool Cool Color Picker to be fully loaded
@@ -112,6 +122,12 @@ async function loadSettings() {
                 messageColorsObserver = null;
             }
         }
+    });
+
+    $('#postprocessing-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].postProcessingEnabled = isEnabled;
+        saveSettingsDebounced();
     });
 }
 
@@ -268,6 +284,44 @@ function modifyUserInput() {
     return true;
 }
 
+// Post-process AI output after a response is generated.
+// Leave this function empty as requested by the user.
+async function postProcess(messageText, messageObj) {
+    try {
+        if (typeof messageText !== 'string') return messageText;
+        return keepFromBanglaLine(messageText);
+    } catch (err) {
+        console.error('SillyKai postProcess error', err);
+        return messageText;
+    }
+}
+
+// Keep from the first line that begins with Bangla characters.
+function keepFromBanglaLine(text) {
+  const lines = text.split(/\r?\n/);
+  let cutIndex = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const cleaned = lines[i].replace(/^[\s\p{P}\p{S}]+/u, "");
+    if (/^[\u0980-\u09FF]/u.test(cleaned)) {
+      cutIndex = i;
+      break;
+    }
+  }
+  
+  const removed = lines.slice(0, cutIndex).join("\n");
+  
+  if (cutIndex === -1){
+      console.log("[Removed thoughts] -", removed);
+      return "";
+    }
+    
+    console.log("[Removed thoughts] -", removed);
+
+  return lines.slice(cutIndex).join("\n").replace(/\*/g, "");
+}
+
+
 // Message colors observer logic
 let messageColorsObserver = null;
 function setupMessageColorsObserver() {
@@ -341,6 +395,38 @@ jQuery(async () => {
     // Apply message colors to existing messages on load
     if (extension_settings[extensionName].messageColorsEnabled) {
         applyMessageColorsToExistingMessages();
+    }
+
+    // Hook into AI response render events to post-process outputs
+    try {
+        eventSource.makeFirst(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
+            try {
+                // Only run if post-processing is enabled for this extension
+                if (!extension_settings[extensionName].postProcessingEnabled) return;
+
+                const context = getContext();
+                const message = context?.chat?.[messageId];
+                if (!message) return;
+
+                // If the message is still generating ("..."), skip
+                const messageTextEl = $(`#chat .mes[mesid="${messageId}"] .mes_text`);
+                if (messageTextEl.length && messageTextEl.text().trim() === '...') return;
+
+                const original = message.mes ?? '';
+                const processed = await postProcess(original, message);
+
+                // If postProcess returned a string different from original, replace the message
+                if (typeof processed === 'string' && processed !== original) {
+                    if (typeof message.extra !== 'object') message.extra = {};
+                    message.mes = processed;
+                    updateMessageBlock(Number(messageId), message);
+                }
+            } catch (err) {
+                console.error('SillyKai postProcess handler error', err);
+            }
+        });
+    } catch (err) {
+        console.warn('SillyKai: could not attach postProcess handler', err);
     }
 });
 

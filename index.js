@@ -4,259 +4,80 @@ import { eventSource, event_types, updateMessageBlock, saveSettingsDebounced } f
 const extensionName = "SillyKai";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const defaultSettings = {
-    enabled: true, // default toggle state
-    postProcessingEnabled: false
+    enabled: true,
+    postProcessingEnabled: false,
+    // per-method postprocessing defaults
+    removeThoughtsEnabled: true,
+    removeCharactersEnabled: false,
+    removeCharactersChars: ''
 };
 
+let messageColorsObserver = null;
 
+jQuery(async () => {
+    const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
+    $("#extensions_settings").append(settingsHtml);
 
-// Shared function for applying name coloring
-function applyNameColoring(html, namesColor) {
-    // Match names at the beginning of the paragraph
-    html = html.replace(/^(\s*)([^:<>"]+)(:)/i, `$1<span data-sillykai-name="true" style="color: ${namesColor};">$2$3</span>`);
-    
-    // Match names after <br> tags (case insensitive for both <br> and <BR>)
-    html = html.replace(/(<br\s*\/?>)(\s*)([^:<>"]+)(:)/gi, `$1$2<span data-sillykai-name="true" style="color: ${namesColor};">$3$4</span>`);
+    await loadSettings();
 
-    return html;
-}
-
-// Get current colors from settings
-function getCurrentColors() {
-    return {
-        textColor: extension_settings[extensionName].messageTextColor || '#ffffff',
-        namesColor: extension_settings[extensionName].messageNamesColor || '#CFCFC5',
-        quotesColor: extension_settings[extensionName].messageQuotesColor || '#87CEEB'
-    };
-}
-
-// Load settings and initialize toggle
-async function loadSettings() {
-    extension_settings[extensionName] = extension_settings[extensionName] || {};
-
-    if (Object.keys(extension_settings[extensionName]).length === 0) {
-        Object.assign(extension_settings[extensionName], defaultSettings);
-    }
-
-    await waitForElement('#autoquote-toggle');
-    await waitForElement('#asterisk-toggle');
-    await waitForElement('#message-colors-toggle');
-    await waitForElement('#postprocessing-toggle');
-    await waitForElement('#message-text-color');
-    await waitForElement('#message-names-color');
-    await waitForElement('#message-quotes-color');
-
-    // Default settings for toggles
-    if (typeof extension_settings[extensionName].asteriskEnabled === 'undefined') {
-        extension_settings[extensionName].asteriskEnabled = $('#asterisk-toggle').is(':checked');
-    }
-    if (typeof extension_settings[extensionName].messageColorsEnabled === 'undefined') {
-        extension_settings[extensionName].messageColorsEnabled = $('#message-colors-toggle').is(':checked');
-    }
-    if (typeof extension_settings[extensionName].messageTextColor === 'undefined') {
-        extension_settings[extensionName].messageTextColor = '#ffffff';
-    }
-    if (typeof extension_settings[extensionName].messageNamesColor === 'undefined') {
-        extension_settings[extensionName].messageNamesColor = '#CFCFC5';
-    }
-    if (typeof extension_settings[extensionName].messageQuotesColor === 'undefined') {
-        extension_settings[extensionName].messageQuotesColor = '#87CEEB';
-    }
-    if (typeof extension_settings[extensionName].postProcessingEnabled === 'undefined') {
-        extension_settings[extensionName].postProcessingEnabled = $('#postprocessing-toggle').is(':checked');
-    }
-
-    // (no debug logs)
-    // Restore toggle states
-    $('#autoquote-toggle').prop('checked', extension_settings[extensionName].enabled);
-    $('#asterisk-toggle').prop('checked', extension_settings[extensionName].asteriskEnabled);
-    $('#message-colors-toggle').prop('checked', extension_settings[extensionName].messageColorsEnabled);
-    $('#postprocessing-toggle').prop('checked', extension_settings[extensionName].postProcessingEnabled);
-    
-    // Set up the Tool Cool Color Pickers with debouncing
-    // Wait for Tool Cool Color Picker to be fully loaded
-    await new Promise(resolve => setTimeout(resolve, 200));
-    
-    setupColorPicker('message-text-color', 'messageTextColor', () => {
-        if (extension_settings[extensionName].messageColorsEnabled) {
-            applyMessageColorsToExistingMessages();
-        }
-    });
-    
-    setupColorPicker('message-names-color', 'messageNamesColor', () => {
-        if (extension_settings[extensionName].messageColorsEnabled) {
-            applyMessageColorsToExistingMessages();
-        }
-    });
-    
-    setupColorPicker('message-quotes-color', 'messageQuotesColor', () => {
-        if (extension_settings[extensionName].messageColorsEnabled) {
-            applyMessageColorsToExistingMessages();
+    $("#send_but").on("click", function (e) {
+        const shouldSend = modifyUserInput();
+        if (!shouldSend) {
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
         }
     });
 
-    // Save toggle states on change
-    $('#autoquote-toggle').on('change', function () {
-        const isEnabled = $(this).is(':checked');
-        extension_settings[extensionName].enabled = isEnabled;
-        toastr.info(`AutoQuote ${isEnabled ? "enabled" : "disabled"}`);
-    });
-
-    $('#asterisk-toggle').on('change', function () {
-        const isEnabled = $(this).is(':checked');
-        extension_settings[extensionName].asteriskEnabled = isEnabled;
-    });
-
-    $('#message-colors-toggle').on('change', function () {
-        const isEnabled = $(this).is(':checked');
-        extension_settings[extensionName].messageColorsEnabled = isEnabled;
-        
-        // Immediately apply/remove colors
-        if (isEnabled) {
-            applyMessageColorsToExistingMessages();
-            setupMessageColorsObserver();
-        } else {
-            removeMessageColorsFromExistingMessages();
-            if (messageColorsObserver) {
-                messageColorsObserver.disconnect();
-                messageColorsObserver = null;
+    $("#send_textarea").on("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey) {
+            const shouldSend = modifyUserInput();
+            if (!shouldSend) {
+                event.preventDefault();
+                event.stopPropagation();
+                return false;
             }
         }
     });
 
-    $('#postprocessing-toggle').on('change', function () {
-        const isEnabled = $(this).is(':checked');
-        extension_settings[extensionName].postProcessingEnabled = isEnabled;
-        saveSettingsDebounced();
-    });
-}
-
-// Setup color picker with debouncing
-function setupColorPicker(id, settingKey, onChangeCallback) {
-    const colorPicker = document.getElementById(id);
-    if (colorPicker) {
-        colorPicker.color = extension_settings[extensionName][settingKey];
-        
-        let colorChangeTimeout;
-        colorPicker.addEventListener('change', (evt) => {
-            clearTimeout(colorChangeTimeout);
-            colorChangeTimeout = setTimeout(() => {
-                const color = evt.detail.hex;
-                extension_settings[extensionName][settingKey] = color;
-                onChangeCallback();
-            }, 50);
-        });
+    setupMessageColorsObserver();
+    
+    if (extension_settings[extensionName].messageColorsEnabled) {
+        applyMessageColorsToExistingMessages();
     }
-}
 
-// Wait for a specific DOM element to exist using MutationObserver
-function waitForElement(selector) {
-    return new Promise((resolve) => {
-        if ($(selector).length > 0) {
-            resolve();
-            return;
-        }
-        
-        const observer = new MutationObserver(() => {
-            if ($(selector).length > 0) {
-                observer.disconnect();
-                resolve();
+    try {
+        eventSource.makeFirst(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
+            try {
+                if (!extension_settings[extensionName].postProcessingEnabled) return;
+
+                const context = getContext();
+                const message = context?.chat?.[messageId];
+                if (!message) return;
+
+                const messageTextEl = $(`#chat .mes[mesid="${messageId}"] .mes_text`);
+                if (messageTextEl.length && messageTextEl.text().trim() === '...') return;
+
+                const original = message.mes ?? '';
+                const processed = await postProcess(original, message);
+
+                if (typeof processed === 'string' && processed !== original) {
+                    if (typeof message.extra !== 'object') message.extra = {};
+                    message.mes = processed;
+                    updateMessageBlock(Number(messageId), message);
+                }
+            } catch (err) {
+                console.error('SillyKai postProcess handler error', err);
             }
         });
-        
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-    });
-}
-
-function modifyLine(inputLine){
-    inputLine = inputLine.replaceAll("\"", "");
-    let arr = inputLine.split("*");
-    let output = "";
-    let inside = false;
-    
-    for (let chunk of arr) {
-        if (!inside) {
-            let trimmed = chunk.trim();
-            if (trimmed) {
-                trimmed = '\"' + trimmed + '\"';
-            }
-            let leadingSpaces = chunk.slice(0, chunk.length - chunk.trimStart().length);
-            output += (leadingSpaces + trimmed);
-            
-            let remainingSpaces = chunk.slice(chunk.trimEnd().length, chunk.length);
-            output += remainingSpaces;
-            
-            inside = true;
-        } else {
-            chunk = '*' + chunk + '*';
-            output += chunk;
-            inside = false;
-        }
+    } catch (err) {
+        console.warn('SillyKai: could not attach postProcess handler', err);
     }
-    // Remove asterisks if the Asterisk toggle is off
-    const asteriskEnabled = extension_settings[extensionName].asteriskEnabled;
-    if (!asteriskEnabled) {
-        output = output.replaceAll('*', '');
-    }
-    return output+"\n"
-}
+});
 
-// Apply message colors to existing messages
-function applyMessageColorsToExistingMessages() {
-    if (!extension_settings[extensionName].messageColorsEnabled) {
-        return;
-    }
-    
-    const { textColor, namesColor, quotesColor } = getCurrentColors();
-    const paragraphs = $('.mes_text p');
-    
-    paragraphs.each(function() {
-        const $p = $(this);
-        
-        // Apply text color to the whole paragraph first
-        $p.css('color', textColor).attr('data-sillykai-styled', 'true');
-        
-        // Color existing <q> elements (quotes)
-        $p.find('q').css('color', quotesColor).attr('data-sillykai-quote', 'true');
-        
-        // Handle name coloring
-        let html = $p.html();
-        const originalHtml = html;
-        html = applyNameColoring(html, namesColor);
-        
-        if (html !== originalHtml) {
-            $p.html(html);
-        }
-    });
-}
-
-// Remove message colors from existing messages
-function removeMessageColorsFromExistingMessages() {
-    $('.mes_text p[data-sillykai-styled]').each(function() {
-        const $p = $(this);
-        
-        // Remove name spans and restore original text
-        $p.find('span[data-sillykai-name]').each(function() {
-            const $el = $(this);
-            $el.replaceWith($el.html());
-        });
-        
-        // Remove quote styling but keep <q> elements
-        $p.find('q[data-sillykai-quote]').removeAttr('data-sillykai-quote').removeAttr('style');
-        
-        // Remove paragraph styling
-        $p.removeAttr('data-sillykai-styled').removeAttr('style');
-    });
-}
-
-// Modify user input before saving (Only if SillyKai is enabled)
 function modifyUserInput() {
     let userInput = String($('#send_textarea').val()).trim();
 
-    // Toggle via command
     if (userInput === "//aq") {
         const currentState = extension_settings[extensionName].enabled;
         const newState = !currentState;
@@ -284,20 +105,65 @@ function modifyUserInput() {
     return true;
 }
 
-// Post-process AI output after a response is generated.
-// Leave this function empty as requested by the user.
+function modifyLine(inputLine){
+    inputLine = inputLine.replaceAll("\"", "");
+    let arr = inputLine.split("*");
+    let output = "";
+    let inside = false;
+    
+    for (let chunk of arr) {
+        if (!inside) {
+            let trimmed = chunk.trim();
+            if (trimmed) {
+                trimmed = '\"' + trimmed + '\"';
+            }
+            let leadingSpaces = chunk.slice(0, chunk.length - chunk.trimStart().length);
+            output += (leadingSpaces + trimmed);
+            
+            let remainingSpaces = chunk.slice(chunk.trimEnd().length, chunk.length);
+            output += remainingSpaces;
+            
+            inside = true;
+        } else {
+            chunk = '*' + chunk + '*';
+            output += chunk;
+            inside = false;
+        }
+    }
+    
+    const asteriskEnabled = extension_settings[extensionName].asteriskEnabled;
+    if (!asteriskEnabled) {
+        output = output.replaceAll('*', '');
+    }
+    return output+"\n"
+}
+
 async function postProcess(messageText, messageObj) {
     try {
         if (typeof messageText !== 'string') return messageText;
-        return keepFromBanglaLine(messageText);
+        // Only run postprocessing if globally enabled
+        if (!extension_settings[extensionName].postProcessingEnabled) return messageText;
+
+        let text = messageText;
+
+        // removethoughts (maintains existing behavior)
+        if (extension_settings[extensionName].removeThoughtsEnabled) {
+            text = removethoughts(text);
+        }
+
+        // remove characters (optional)
+        if (extension_settings[extensionName].removeCharactersEnabled) {
+            const chars = String(extension_settings[extensionName].removeCharactersChars || '');
+            text = removecharacters(text, chars);
+        }
+
+        return text;
     } catch (err) {
         console.error('SillyKai postProcess error', err);
         return messageText;
     }
 }
-
-// Keep from the first line that begins with Bangla characters.
-function keepFromBanglaLine(text) {
+function removethoughts(text) {
   const lines = text.split(/\r?\n/);
   let cutIndex = -1;
 
@@ -311,19 +177,31 @@ function keepFromBanglaLine(text) {
   
   const removed = lines.slice(0, cutIndex).join("\n");
   
-  if (cutIndex === -1){
-      console.log("[Removed thoughts] -", removed);
-      return "";
-    }
+    if (cutIndex === -1){
+            console.log("[removethoughts] -", removed);
+            return "";
+        }
     
-    console.log("[Removed thoughts] -", removed);
+        console.log("[removethoughts] -", removed);
 
   return lines.slice(cutIndex).join("\n").replace(/\*/g, "");
 }
 
+function removecharacters(text, charsCsv) {
+    if (!charsCsv) return text;
 
-// Message colors observer logic
-let messageColorsObserver = null;
+    // parse comma-separated values, trim and filter empties
+    const parts = charsCsv.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) return text;
+
+    // escape regex special chars for each token
+    const escaped = parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+    // build regex to remove any occurrence of the tokens
+    const pattern = new RegExp(`(${escaped.join('|')})`, 'gu');
+    return String(text).replace(pattern, '');
+}
+
 function setupMessageColorsObserver() {
     if (messageColorsObserver) {
         messageColorsObserver.disconnect();
@@ -342,13 +220,9 @@ function setupMessageColorsObserver() {
                 targets.forEach(p => {
                     const $p = $(p);
                     
-                    // Apply text color to the whole paragraph
                     $p.css('color', textColor).attr('data-sillykai-styled', 'true');
-                    
-                    // Color existing <q> elements (quotes)
                     $p.find('q').css('color', quotesColor).attr('data-sillykai-quote', 'true');
                     
-                    // Handle name coloring
                     let html = p.innerHTML;
                     html = applyNameColoring(html, namesColor);
                     p.innerHTML = html;
@@ -362,72 +236,219 @@ function setupMessageColorsObserver() {
     });
 }
 
-// Hook into the send button and textarea
-jQuery(async () => {
-    const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
-    $("#extensions_settings").append(settingsHtml);
+function applyMessageColorsToExistingMessages() {
+    if (!extension_settings[extensionName].messageColorsEnabled) {
+        return;
+    }
+    
+    const { textColor, namesColor, quotesColor } = getCurrentColors();
+    const paragraphs = $('.mes_text p');
+    
+    paragraphs.each(function() {
+        const $p = $(this);
+        
+        $p.css('color', textColor).attr('data-sillykai-styled', 'true');
+        $p.find('q').css('color', quotesColor).attr('data-sillykai-quote', 'true');
+        
+        let html = $p.html();
+        const originalHtml = html;
+        html = applyNameColoring(html, namesColor);
+        
+        if (html !== originalHtml) {
+            $p.html(html);
+        }
+    });
+}
 
-    await loadSettings();
+function removeMessageColorsFromExistingMessages() {
+    $('.mes_text p[data-sillykai-styled]').each(function() {
+        const $p = $(this);
+        
+        $p.find('span[data-sillykai-name]').each(function() {
+            const $el = $(this);
+            $el.replaceWith($el.html());
+        });
+        
+        $p.find('q[data-sillykai-quote]').removeAttr('data-sillykai-quote').removeAttr('style');
+        $p.removeAttr('data-sillykai-styled').removeAttr('style');
+    });
+}
 
-    $("#send_but").on("click", function (e) {
-        const shouldSend = modifyUserInput();
-        if (!shouldSend) {
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
+function applyNameColoring(html, namesColor) {
+    html = html.replace(/^(\s*)([^:<>"]+)(:)/i, `$1<span data-sillykai-name="true" style="color: ${namesColor};">$2$3</span>`);
+    html = html.replace(/(<br\s*\/?>)(\s*)([^:<>"]+)(:)/gi, `$1$2<span data-sillykai-name="true" style="color: ${namesColor};">$3$4</span>`);
+    return html;
+}
+
+function getCurrentColors() {
+    return {
+        textColor: extension_settings[extensionName].messageTextColor || '#ffffff',
+        namesColor: extension_settings[extensionName].messageNamesColor || '#CFCFC5',
+        quotesColor: extension_settings[extensionName].messageQuotesColor || '#87CEEB'
+    };
+}
+
+async function loadSettings() {
+    extension_settings[extensionName] = extension_settings[extensionName] || {};
+
+    if (Object.keys(extension_settings[extensionName]).length === 0) {
+        Object.assign(extension_settings[extensionName], defaultSettings);
+    }
+
+    await waitForElement('#autoquote-toggle');
+    await waitForElement('#asterisk-toggle');
+    await waitForElement('#message-colors-toggle');
+    await waitForElement('#postprocessing-toggle');
+    await waitForElement('#message-text-color');
+    await waitForElement('#message-names-color');
+    await waitForElement('#message-quotes-color');
+
+    if (typeof extension_settings[extensionName].asteriskEnabled === 'undefined') {
+        extension_settings[extensionName].asteriskEnabled = $('#asterisk-toggle').is(':checked');
+    }
+    if (typeof extension_settings[extensionName].messageColorsEnabled === 'undefined') {
+        extension_settings[extensionName].messageColorsEnabled = $('#message-colors-toggle').is(':checked');
+    }
+    if (typeof extension_settings[extensionName].messageTextColor === 'undefined') {
+        extension_settings[extensionName].messageTextColor = '#ffffff';
+    }
+    if (typeof extension_settings[extensionName].messageNamesColor === 'undefined') {
+        extension_settings[extensionName].messageNamesColor = '#CFCFC5';
+    }
+    if (typeof extension_settings[extensionName].messageQuotesColor === 'undefined') {
+        extension_settings[extensionName].messageQuotesColor = '#87CEEB';
+    }
+    if (typeof extension_settings[extensionName].postProcessingEnabled === 'undefined') {
+        extension_settings[extensionName].postProcessingEnabled = $('#postprocessing-toggle').is(':checked');
+    }
+
+    $('#autoquote-toggle').prop('checked', extension_settings[extensionName].enabled);
+    $('#asterisk-toggle').prop('checked', extension_settings[extensionName].asteriskEnabled);
+    $('#message-colors-toggle').prop('checked', extension_settings[extensionName].messageColorsEnabled);
+    $('#postprocessing-toggle').prop('checked', extension_settings[extensionName].postProcessingEnabled);
+    
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    setupColorPicker('message-text-color', 'messageTextColor', () => {
+        if (extension_settings[extensionName].messageColorsEnabled) {
+            applyMessageColorsToExistingMessages();
+        }
+    });
+    
+    setupColorPicker('message-names-color', 'messageNamesColor', () => {
+        if (extension_settings[extensionName].messageColorsEnabled) {
+            applyMessageColorsToExistingMessages();
+        }
+    });
+    
+    setupColorPicker('message-quotes-color', 'messageQuotesColor', () => {
+        if (extension_settings[extensionName].messageColorsEnabled) {
+            applyMessageColorsToExistingMessages();
         }
     });
 
-    $("#send_textarea").on("keydown", function (event) {
-        if (event.key === "Enter" && !event.shiftKey) {
-            const shouldSend = modifyUserInput();
-            if (!shouldSend) {
-                event.preventDefault();
-                event.stopPropagation();
-                return false;
+    $('#autoquote-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].enabled = isEnabled;
+        toastr.info(`AutoQuote ${isEnabled ? "enabled" : "disabled"}`);
+    });
+
+    $('#asterisk-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].asteriskEnabled = isEnabled;
+    });
+
+    $('#message-colors-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].messageColorsEnabled = isEnabled;
+        
+        if (isEnabled) {
+            applyMessageColorsToExistingMessages();
+            setupMessageColorsObserver();
+        } else {
+            removeMessageColorsFromExistingMessages();
+            if (messageColorsObserver) {
+                messageColorsObserver.disconnect();
+                messageColorsObserver = null;
             }
         }
     });
 
-    // Initial setup
-    setupMessageColorsObserver();
-    
-    // Apply message colors to existing messages on load
-    if (extension_settings[extensionName].messageColorsEnabled) {
-        applyMessageColorsToExistingMessages();
+    $('#postprocessing-toggle').on('change', function () {
+        const isEnabled = $(this).is(':checked');
+        extension_settings[extensionName].postProcessingEnabled = isEnabled;
+        saveSettingsDebounced();
+    });
+
+    // Optional per-method postprocessing UI controls (non-blocking)
+    if ($('#remove-thoughts-toggle').length) {
+        if (typeof extension_settings[extensionName].removeThoughtsEnabled === 'undefined') {
+            extension_settings[extensionName].removeThoughtsEnabled = $('#remove-thoughts-toggle').is(':checked');
+        }
+        $('#remove-thoughts-toggle').prop('checked', extension_settings[extensionName].removeThoughtsEnabled);
+        $('#remove-thoughts-toggle').on('change', function () {
+            extension_settings[extensionName].removeThoughtsEnabled = $(this).is(':checked');
+            saveSettingsDebounced();
+        });
     }
 
-    // Hook into AI response render events to post-process outputs
-    try {
-        eventSource.makeFirst(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
-            try {
-                // Only run if post-processing is enabled for this extension
-                if (!extension_settings[extensionName].postProcessingEnabled) return;
+    if ($('#remove-characters-toggle').length) {
+        if (typeof extension_settings[extensionName].removeCharactersEnabled === 'undefined') {
+            extension_settings[extensionName].removeCharactersEnabled = $('#remove-characters-toggle').is(':checked');
+        }
+        $('#remove-characters-toggle').prop('checked', extension_settings[extensionName].removeCharactersEnabled);
+        $('#remove-characters-toggle').on('change', function () {
+            extension_settings[extensionName].removeCharactersEnabled = $(this).is(':checked');
+            saveSettingsDebounced();
+        });
+    }
 
-                const context = getContext();
-                const message = context?.chat?.[messageId];
-                if (!message) return;
+    if ($('#remove-characters-chars').length) {
+        if (typeof extension_settings[extensionName].removeCharactersChars === 'undefined') {
+            extension_settings[extensionName].removeCharactersChars = $('#remove-characters-chars').val() || '';
+        }
+        $('#remove-characters-chars').val(extension_settings[extensionName].removeCharactersChars);
+        $('#remove-characters-chars').on('input change', function () {
+            extension_settings[extensionName].removeCharactersChars = $(this).val();
+            saveSettingsDebounced();
+        });
+    }
+}
 
-                // If the message is still generating ("..."), skip
-                const messageTextEl = $(`#chat .mes[mesid="${messageId}"] .mes_text`);
-                if (messageTextEl.length && messageTextEl.text().trim() === '...') return;
+function setupColorPicker(id, settingKey, onChangeCallback) {
+    const colorPicker = document.getElementById(id);
+    if (colorPicker) {
+        colorPicker.color = extension_settings[extensionName][settingKey];
+        
+        let colorChangeTimeout;
+        colorPicker.addEventListener('change', (evt) => {
+            clearTimeout(colorChangeTimeout);
+            colorChangeTimeout = setTimeout(() => {
+                const color = evt.detail.hex;
+                extension_settings[extensionName][settingKey] = color;
+                onChangeCallback();
+            }, 50);
+        });
+    }
+}
 
-                const original = message.mes ?? '';
-                const processed = await postProcess(original, message);
-
-                // If postProcess returned a string different from original, replace the message
-                if (typeof processed === 'string' && processed !== original) {
-                    if (typeof message.extra !== 'object') message.extra = {};
-                    message.mes = processed;
-                    updateMessageBlock(Number(messageId), message);
-                }
-            } catch (err) {
-                console.error('SillyKai postProcess handler error', err);
+function waitForElement(selector) {
+    return new Promise((resolve) => {
+        if ($(selector).length > 0) {
+            resolve();
+            return;
+        }
+        
+        const observer = new MutationObserver(() => {
+            if ($(selector).length > 0) {
+                observer.disconnect();
+                resolve();
             }
         });
-    } catch (err) {
-        console.warn('SillyKai: could not attach postProcess handler', err);
-    }
-});
-
-
+        
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    });
+}

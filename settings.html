@@ -22,6 +22,39 @@
                 <span>Toggle Asterisk on/off</span>
             </div>
             <div class="sillykai-extension_block flex-container"
+            style="display: flex; align-items: center; gap: 8px; padding-left: 5px; margin-top: 8px;">
+            <label class="switch">
+                <input type="checkbox" id="postprocessing-toggle">
+                <span class="slider round"></span>
+                </label>
+                <span>Postprocessing</span>
+            </div>
+            
+            <!-- Per-method postprocessing options -->
+            <div style="padding-left: 25px; margin-top: 6px;">
+                <div class="sillykai-extension_block flex-container"
+                style="display: flex; align-items: center; gap: 8px; padding-left: 0px; margin-top: 4px;">
+                <label class="switch">
+                    <input type="checkbox" id="remove-thoughts-toggle">
+                    <span class="slider round"></span>
+                </label>
+                <span>Remove thoughts</span>
+            </div>
+            
+            <div class="sillykai-extension_block flex-container"
+            style="display: flex; align-items: center; gap: 8px; padding-left: 0px; margin-top: 8px;">
+            <label class="switch">
+                        <input type="checkbox" id="remove-characters-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                    <span style="min-width: 120px;">Remove characters</span>
+                    <input type="text" id="remove-characters-chars" placeholder="comma-separated tokens"
+                    style="flex: 1; min-width: 140px; padding: 4px 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff;" />
+                </div>
+            </div>
+            
+            <!-- Message Text Color -->
+            <div class="sillykai-extension_block flex-container"
                 style="display: flex; align-items: center; gap: 8px; padding-left: 5px; margin-top: 8px;">
                 <label class="switch">
                     <input type="checkbox" id="message-colors-toggle">
@@ -29,16 +62,6 @@
                 </label>
                 <span>Message Colors</span>
             </div>
-            <div class="sillykai-extension_block flex-container"
-                style="display: flex; align-items: center; gap: 8px; padding-left: 5px; margin-top: 8px;">
-                <label class="switch">
-                    <input type="checkbox" id="postprocessing-toggle">
-                    <span class="slider round"></span>
-                </label>
-                <span>Post-process AI responses</span>
-            </div>
-            
-            <!-- Message Text Color -->
             <div class="sillykai-extension_block flex-container"
                 style="display: flex; align-items: center; gap: 8px; padding-left: 25px; margin-top: 8px;">
                 <span style="min-width: 80px;">Text:</span>

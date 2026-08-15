@@ -9,10 +9,14 @@ const defaultSettings = {
     // per-method postprocessing defaults
     removeThoughtsEnabled: true,
     removeCharactersEnabled: false,
-    removeCharactersChars: ''
+    removeCharactersChars: '',
+    fixNewlinesEnabled: false,
 };
 
 let messageColorsObserver = null;
+
+// Supporting full Unicode letters/numbers for names
+const NAME_PREFIX_SOURCE = '[\\p{L}\\p{N}_][^:\\n()]*?(?:\\s*\\([^)\\n]+\\)){1,3}\\s*:';
 
 jQuery(async () => {
     const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
@@ -49,31 +53,81 @@ jQuery(async () => {
     try {
         eventSource.makeFirst(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
             try {
+                console.debug(`[SillyKai] CHARACTER_MESSAGE_RENDERED received for ${messageId}`);
                 if (!extension_settings[extensionName].postProcessingEnabled) return;
 
-                const context = getContext();
-                const message = context?.chat?.[messageId];
-                if (!message) return;
-
-                const messageTextEl = $(`#chat .mes[mesid="${messageId}"] .mes_text`);
-                if (messageTextEl.length && messageTextEl.text().trim() === '...') return;
-
-                const original = message.mes ?? '';
-                const processed = await postProcess(original, message);
-
-                if (typeof processed === 'string' && processed !== original) {
-                    if (typeof message.extra !== 'object') message.extra = {};
-                    message.mes = processed;
-                    updateMessageBlock(Number(messageId), message);
+                // If the message is already finished, process immediately.
+                const ctxNow = getContext();
+                const msgNow = ctxNow?.chat?.[messageId];
+                if (msgNow && msgNow.gen_finished) {
+                    console.debug(`[SillyKai] message ${messageId} already finished — running postProcess`);
+                    const original = msgNow.mes ?? '';
+                    const processed = await postProcess(original, msgNow);
+                    if (typeof processed === 'string' && processed !== original) {
+                        if (typeof msgNow.extra !== 'object') msgNow.extra = {};
+                        msgNow.mes = processed;
+                        updateMessageBlock(Number(messageId), msgNow);
+                        console.debug(`[SillyKai] postProcess changed message ${messageId}`);
+                    } else {
+                        console.debug(`[SillyKai] postProcess made no changes for message ${messageId}`);
+                    }
+                    return;
                 }
+
+                // Otherwise attach a temporary event listener that will run when the
+                // message is rendered again (which the app emits when streaming finishes).
+                const timeoutMs = 10000;
+                let timeoutHandle = null;
+
+                console.debug(`[SillyKai] attaching followHandler for message ${messageId}`);
+
+                const followHandler = async (mid) => {
+                    if (mid !== messageId) return;
+                    console.debug(`[SillyKai] followHandler triggered for ${mid}`);
+                    try {
+                        const ctx2 = getContext();
+                        const msg2 = ctx2?.chat?.[mid];
+                        if (!msg2) return;
+                        if (!msg2.gen_finished) {
+                            console.debug(`[SillyKai] message ${mid} still streaming (gen_finished not set)`);
+                            return; // still streaming, wait for next event
+                        }
+
+                        const original = msg2.mes ?? '';
+                        const processed = await postProcess(original, msg2);
+                        if (typeof processed === 'string' && processed !== original) {
+                            if (typeof msg2.extra !== 'object') msg2.extra = {};
+                            msg2.mes = processed;
+                            updateMessageBlock(Number(mid), msg2);
+                            console.debug(`[SillyKai] postProcess applied for message ${mid}`);
+                        } else {
+                            console.debug(`[SillyKai] postProcess made no changes for message ${mid}`);
+                        }
+                    } catch (e) {
+                        console.error('[SillyKai] followHandler error', e);
+                    } finally {
+                        try { eventSource.removeListener(event_types.CHARACTER_MESSAGE_RENDERED, followHandler); } catch (e) {}
+                        if (timeoutHandle) {
+                            clearTimeout(timeoutHandle);
+                            timeoutHandle = null;
+                        }
+                    }
+                };
+
+                eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, followHandler);
+                timeoutHandle = setTimeout(() => {
+                    try { eventSource.removeListener(event_types.CHARACTER_MESSAGE_RENDERED, followHandler); } catch (e) {}
+                    console.debug(`[SillyKai] followHandler timeout for message ${messageId}`);
+                }, timeoutMs);
             } catch (err) {
-                console.error('SillyKai postProcess handler error', err);
+                console.error('[SillyKai] postProcess handler error', err);
             }
         });
     } catch (err) {
         console.warn('SillyKai: could not attach postProcess handler', err);
     }
 });
+
 
 function modifyUserInput() {
     let userInput = String($('#send_textarea').val()).trim();
@@ -111,7 +165,8 @@ function modifyLine(inputLine){
     let output = "";
     let inside = false;
     
-    for (let chunk of arr) {
+    for (let i = 0; i < arr.length; i++) {
+        let chunk = arr[i];
         if (!inside) {
             let trimmed = chunk.trim();
             if (trimmed) {
@@ -135,23 +190,27 @@ function modifyLine(inputLine){
     if (!asteriskEnabled) {
         output = output.replaceAll('*', '');
     }
-    return output+"\n"
+    return output + "\n";
 }
 
 async function postProcess(messageText, messageObj) {
     try {
         if (typeof messageText !== 'string') return messageText;
-        // Only run postprocessing if globally enabled
         if (!extension_settings[extensionName].postProcessingEnabled) return messageText;
 
         let text = messageText;
 
-        // removethoughts (maintains existing behavior)
+        // 1. Remove thoughts first
         if (extension_settings[extensionName].removeThoughtsEnabled) {
             text = removethoughts(text);
         }
+        
+        // 2. Fix line breaks and speaker boundaries second
+        if (extension_settings[extensionName].fixNewlinesEnabled) {
+            text = fixnewlines(text);
+        }
 
-        // remove characters (optional)
+        // 3. Strip configured characters last
         if (extension_settings[extensionName].removeCharactersEnabled) {
             const chars = String(extension_settings[extensionName].removeCharactersChars || '');
             text = removecharacters(text, chars);
@@ -163,43 +222,68 @@ async function postProcess(messageText, messageObj) {
         return messageText;
     }
 }
+
 function removethoughts(text) {
-  const lines = text.split(/\r?\n/);
-  let cutIndex = -1;
+    const lines = text.split(/\r?\n/);
+    let cutIndex = -1;
 
-  for (let i = 0; i < lines.length; i++) {
-    const cleaned = lines[i].replace(/^[\s\p{P}\p{S}]+/u, "");
-    if (/^[\u0980-\u09FF]/u.test(cleaned)) {
-      cutIndex = i;
-      break;
-    }
-  }
-  
-  const removed = lines.slice(0, cutIndex).join("\n");
-  
-    if (cutIndex === -1){
-            console.log("[removethoughts] -", removed);
-            return "";
+    for (let i = 0; i < lines.length; i++) {
+        const cleaned = lines[i].replace(/^[\s\p{P}\p{S}]+/u, "");
+        if (/^[\u0980-\u09FF]/u.test(cleaned)) {
+            cutIndex = i;
+            break;
         }
+    }
     
-        console.log("[removethoughts] -", removed);
+    if (cutIndex === -1){
+        return text;
+    }
 
-  return lines.slice(cutIndex).join("\n").replace(/\*/g, "");
+    return lines.slice(cutIndex).join("\n").replace(/\*/g, "");
 }
 
 function removecharacters(text, charsCsv) {
     if (!charsCsv) return text;
 
-    // parse comma-separated values, trim and filter empties
     const parts = charsCsv.split(',').map(s => s.trim()).filter(Boolean);
     if (parts.length === 0) return text;
 
-    // escape regex special chars for each token
     const escaped = parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-
-    // build regex to remove any occurrence of the tokens
     const pattern = new RegExp(`(${escaped.join('|')})`, 'gu');
     return String(text).replace(pattern, '');
+}
+
+function fixnewlines(text) {
+    if (typeof text !== 'string' || !text) return text;
+
+    // Step 1: Fix broken lines where a name tag got split (e.g. "A\nbir (dost) (20):")
+    let cleanedText = text.replace(/([A-Za-z0-9_]+)\s*\r?\n\s*([A-Za-z0-9_]+\s*\([^)\n]+\))/gu, '$1$2');
+
+    // Step 2: Ensure every name prefix starts on a brand-new line
+    const midLineNamePrefix = new RegExp(`([^\\n])\\s*(${NAME_PREFIX_SOURCE})`, 'gu');
+    const withBreaks = cleanedText.replace(midLineNamePrefix, '$1\n$2');
+
+    // Step 3: Split into individual lines and isolate each speaker tag
+    const nameLineStart = new RegExp('^\\s*' + NAME_PREFIX_SOURCE, 'u');
+    const lines = withBreaks.split(/\r?\n/);
+    const output = [];
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        // If it starts with a speaker tag, force it onto a new line
+        if (nameLineStart.test(trimmed)) {
+            output.push(trimmed);
+        } else if (output.length > 0) {
+            output[output.length - 1] += ' ' + trimmed;
+        } else {
+            output.push(trimmed);
+        }
+    }
+
+    // Step 4: Rejoin with clean line breaks
+    return output.join('\n');
 }
 
 function setupMessageColorsObserver() {
@@ -220,6 +304,10 @@ function setupMessageColorsObserver() {
                 targets.forEach(p => {
                     const $p = $(p);
                     
+                    // Guard against mutation loop
+                    if (p.getAttribute('data-sillykai-colored')) return;
+                    p.setAttribute('data-sillykai-colored', 'true');
+
                     $p.css('color', textColor).attr('data-sillykai-styled', 'true');
                     $p.find('q').css('color', quotesColor).attr('data-sillykai-quote', 'true');
                     
@@ -230,6 +318,7 @@ function setupMessageColorsObserver() {
             });
         });
     });
+    
     messageColorsObserver.observe(document.body, {
         childList: true,
         subtree: true
@@ -246,7 +335,9 @@ function applyMessageColorsToExistingMessages() {
     
     paragraphs.each(function() {
         const $p = $(this);
+        const pElem = this;
         
+        pElem.setAttribute('data-sillykai-colored', 'true');
         $p.css('color', textColor).attr('data-sillykai-styled', 'true');
         $p.find('q').css('color', quotesColor).attr('data-sillykai-quote', 'true');
         
@@ -270,7 +361,7 @@ function removeMessageColorsFromExistingMessages() {
         });
         
         $p.find('q[data-sillykai-quote]').removeAttr('data-sillykai-quote').removeAttr('style');
-        $p.removeAttr('data-sillykai-styled').removeAttr('style');
+        $p.removeAttr('data-sillykai-styled').removeAttr('data-sillykai-colored').removeAttr('style');
     });
 }
 
@@ -305,6 +396,9 @@ async function loadSettings() {
 
     if (typeof extension_settings[extensionName].asteriskEnabled === 'undefined') {
         extension_settings[extensionName].asteriskEnabled = $('#asterisk-toggle').is(':checked');
+    }
+    if (typeof extension_settings[extensionName].fixNewlinesEnabled === 'undefined') {
+        extension_settings[extensionName].fixNewlinesEnabled = false;
     }
     if (typeof extension_settings[extensionName].messageColorsEnabled === 'undefined') {
         extension_settings[extensionName].messageColorsEnabled = $('#message-colors-toggle').is(':checked');
@@ -380,7 +474,6 @@ async function loadSettings() {
         saveSettingsDebounced();
     });
 
-    // Optional per-method postprocessing UI controls (non-blocking)
     if ($('#remove-thoughts-toggle').length) {
         if (typeof extension_settings[extensionName].removeThoughtsEnabled === 'undefined') {
             extension_settings[extensionName].removeThoughtsEnabled = $('#remove-thoughts-toggle').is(':checked');
@@ -410,6 +503,18 @@ async function loadSettings() {
         $('#remove-characters-chars').val(extension_settings[extensionName].removeCharactersChars);
         $('#remove-characters-chars').on('input change', function () {
             extension_settings[extensionName].removeCharactersChars = $(this).val();
+            saveSettingsDebounced();
+        });
+    }
+
+    if ($('#remove-newlines-toggle').length) {
+        $('#remove-newlines-toggle').prop(
+            'checked',
+            extension_settings[extensionName].fixNewlinesEnabled
+        );
+
+        $('#remove-newlines-toggle').on('change', function () {
+            extension_settings[extensionName].fixNewlinesEnabled = $(this).is(':checked');
             saveSettingsDebounced();
         });
     }

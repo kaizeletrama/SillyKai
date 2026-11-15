@@ -13,6 +13,17 @@ const defaultSettings = {
     fixNewlinesEnabled: false,
 };
 
+// Blank characters: ordinary whitespace (includes U+0020) plus the
+// Braille Pattern Blank U+2800, which JS trim() and \s do NOT treat as blank.
+// Both are kept exactly as typed; they are only recognised, never swapped.
+const BLANK_CLASS = '[\\s\\u2800]';
+const LEAD_BLANK_RE = new RegExp(`^${BLANK_CLASS}+`);
+const TRAIL_BLANK_RE = new RegExp(`${BLANK_CLASS}+$`);
+
+function trimBlank(s) {
+    return String(s).replace(LEAD_BLANK_RE, '').replace(TRAIL_BLANK_RE, '');
+}
+
 let messageColorsObserver = null;
 
 // Supporting full Unicode letters/numbers for names.
@@ -134,7 +145,7 @@ jQuery(async () => {
 
 
 function modifyUserInput() {
-    let userInput = String($('#send_textarea').val()).trim();
+    let userInput = trimBlank($('#send_textarea').val());
 
     if (userInput === "//aq") {
         const currentState = extension_settings[extensionName].enabled;
@@ -157,7 +168,7 @@ function modifyUserInput() {
     for (let line of arr){
         modifiedInput += modifyLine(line);
     }
-    modifiedInput = modifiedInput.trim();
+    modifiedInput = trimBlank(modifiedInput);
     $('#send_textarea').val(modifiedInput);
 
     return true;
@@ -172,16 +183,17 @@ function modifyLine(inputLine){
     for (let i = 0; i < arr.length; i++) {
         let chunk = arr[i];
         if (!inside) {
-            let trimmed = chunk.trim();
-            if (trimmed) {
-                trimmed = '\"' + trimmed + '\"';
+            const core = trimBlank(chunk);
+            if (!core) {
+                // Chunk is only blanks (U+0020 and/or U+2800): keep it as-is, no quotes.
+                output += chunk;
+            } else {
+                // Keep leading/trailing blanks outside the quotes, untouched.
+                const start = chunk.indexOf(core);
+                const leading = chunk.slice(0, start);
+                const trailing = chunk.slice(start + core.length);
+                output += leading + '"' + core + '"' + trailing;
             }
-            let leadingSpaces = chunk.slice(0, chunk.length - chunk.trimStart().length);
-            output += (leadingSpaces + trimmed);
-
-            let remainingSpaces = chunk.slice(chunk.trimEnd().length, chunk.length);
-            output += remainingSpaces;
-
             inside = true;
         } else {
             chunk = '*' + chunk + '*';
@@ -232,7 +244,8 @@ function removethoughts(text) {
     let cutIndex = -1;
 
     for (let i = 0; i < lines.length; i++) {
-        const cleaned = lines[i].replace(/^[\s\p{P}\p{S}]+/u, "");
+        // \p{S} already covers U+2800 (Symbol, other); \s covers U+0020.
+        const cleaned = lines[i].replace(/^[\s\u2800\p{P}\p{S}]+/u, "");
         if (/^[\u0980-\u09FF]/u.test(cleaned)) {
             cutIndex = i;
             break;
@@ -249,6 +262,8 @@ function removethoughts(text) {
 function removecharacters(text, charsCsv) {
     if (!charsCsv) return text;
 
+    // Note: no blank-trimming here, so U+2800 entered by the user stays a
+    // literal character to remove, distinct from U+0020.
     const parts = charsCsv.split(',').map(s => s.trim()).filter(Boolean);
     if (parts.length === 0) return text;
 
@@ -265,11 +280,12 @@ function fixnewlines(text) {
     const WORD_CHARS = '\\p{L}\\p{M}\\p{N}_\\u200c\\u200d';
 
     // Name prefix, with the Bangla danda (। ॥) excluded as sentence punctuation.
-    const NAME_PREFIX_SOURCE = '[\\p{L}\\p{N}_][^:\\n()."\'?!,।॥]{0,40}?(?:\\s*\\([^)\\n]{0,60}\\)){1,3}\\s*:';
+    // Blank runs between parts may be U+0020 or U+2800.
+    const NAME_PREFIX_SOURCE = '[\\p{L}\\p{N}_][^:\\n()."\'?!,।॥]{0,40}?(?:[\\s\\u2800]*\\([^)\\n]{0,60}\\)){1,3}[\\s\\u2800]*:';
 
     // Step 1: repair a name split across a raw newline (Unicode-aware).
     const splitName = new RegExp(
-        `([${WORD_CHARS}]+)[ \\t]*\\r?\\n[ \\t]*([${WORD_CHARS}]+\\s*\\([^)\\n]+\\))`,
+        `([${WORD_CHARS}]+)[ \\t\\u2800]*\\r?\\n[ \\t\\u2800]*([${WORD_CHARS}]+[\\s\\u2800]*\\([^)\\n]+\\))`,
         'gu'
     );
     let cleaned = text;
@@ -282,19 +298,19 @@ function fixnewlines(text) {
     // Step 2: the boundary must not be any word character, including
     // combining marks, so a name can't be sliced after a matra.
     const midLineNamePrefix = new RegExp(
-        `([^\\n${WORD_CHARS}])\\s*(${NAME_PREFIX_SOURCE})`,
+        `([^\\n${WORD_CHARS}])[\\s\\u2800]*(${NAME_PREFIX_SOURCE})`,
         'gu'
     );
     const withBreaks = cleaned.replace(midLineNamePrefix, '$1\n$2');
 
     // Step 3: each name-prefixed line stands alone; untagged lines get
     // appended to the previous line.
-    const nameLineStart = new RegExp('^\\s*' + NAME_PREFIX_SOURCE, 'u');
+    const nameLineStart = new RegExp('^[\\s\\u2800]*' + NAME_PREFIX_SOURCE, 'u');
     const lines = withBreaks.split(/\r?\n/);
     const output = [];
 
     for (const line of lines) {
-        const trimmed = line.trim();
+        const trimmed = trimBlank(line);
         if (!trimmed) continue;
 
         if (nameLineStart.test(trimmed)) {
@@ -390,8 +406,9 @@ function removeMessageColorsFromExistingMessages() {
 }
 
 function applyNameColoring(html, namesColor) {
-    html = html.replace(/^(\s*)([^:<>"]+)(:)/i, `$1<span data-sillykai-name="true" style="color: ${namesColor};">$2$3</span>`);
-    html = html.replace(/(<br\s*\/?>)(\s*)([^:<>"]+)(:)/gi, `$1$2<span data-sillykai-name="true" style="color: ${namesColor};">$3$4</span>`);
+    // Leading blanks (U+0020 or U+2800) stay outside the name span.
+    html = html.replace(/^([\s\u2800]*)([^:<>"]+)(:)/i, `$1<span data-sillykai-name="true" style="color: ${namesColor};">$2$3</span>`);
+    html = html.replace(/(<br\s*\/?>)([\s\u2800]*)([^:<>"]+)(:)/gi, `$1$2<span data-sillykai-name="true" style="color: ${namesColor};">$3$4</span>`);
     return html;
 }
 

@@ -11,6 +11,7 @@ const defaultSettings = {
     removeCharactersEnabled: false,
     removeCharactersChars: '',
     fixNewlinesEnabled: false,
+	excludeBracketEnabled: false,
 };
 
 // Blank characters: ordinary whitespace (includes U+0020) plus the
@@ -216,6 +217,18 @@ async function postProcess(messageText, messageObj) {
 
         let text = messageText;
 
+        // 0. Set aside the first [...] block so it is never touched
+        let head = '';
+        let sep = '';
+        if (extension_settings[extensionName].excludeBracketEnabled) {
+            const parts = splitLeadingBracket(text);
+            if (parts) {
+                head = parts.head;
+                sep = parts.sep;
+                text = parts.body;
+            }
+        }
+
         // 1. Remove thoughts first
         if (extension_settings[extensionName].removeThoughtsEnabled) {
             text = removethoughts(text);
@@ -232,11 +245,36 @@ async function postProcess(messageText, messageObj) {
             text = removecharacters(text, chars);
         }
 
-        return text;
+        // Re-attach the excluded block exactly as it was
+        return head ? head + sep + text : text;
     } catch (err) {
         console.error('SillyKai postProcess error', err);
         return messageText;
     }
+}
+
+// Splits off a leading [...] block (nested brackets are handled).
+// Returns { head, sep, body }: head is the bracket block (with any leading
+// blanks), sep is the whitespace between it and the rest, body is the rest.
+function splitLeadingBracket(text) {
+    const m = text.match(/^[\s\u2800]*\[/);
+    if (!m) return null;
+
+    let depth = 0;
+    let end = -1;
+    for (let i = m[0].length - 1; i < text.length; i++) {
+        if (text[i] === '[') depth++;
+        else if (text[i] === ']') {
+            depth--;
+            if (depth === 0) { end = i; break; }
+        }
+    }
+    if (end === -1) return null; // unclosed bracket: don't exclude anything
+
+    const head = text.slice(0, end + 1);
+    const rest = text.slice(end + 1);
+    const sep = rest.match(/^[\s\u2800]*/)[0];
+    return { head, sep, body: rest.slice(sep.length) };
 }
 
 function removethoughts(text) {
@@ -556,6 +594,17 @@ async function loadSettings() {
 
         $('#remove-newlines-toggle').on('change', function () {
             extension_settings[extensionName].fixNewlinesEnabled = $(this).is(':checked');
+            saveSettingsDebounced();
+        });
+    }
+	
+	if ($('#exclude-bracket-toggle').length) {
+        $('#exclude-bracket-toggle').prop(
+            'checked',
+            !!extension_settings[extensionName].excludeBracketEnabled
+        );
+        $('#exclude-bracket-toggle').on('change', function () {
+            extension_settings[extensionName].excludeBracketEnabled = $(this).is(':checked');
             saveSettingsDebounced();
         });
     }

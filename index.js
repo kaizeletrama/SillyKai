@@ -8,10 +8,12 @@ const defaultSettings = {
     postProcessingEnabled: false,
     // per-method postprocessing defaults
     removeThoughtsEnabled: true,
+    removeThoughtsOpen: '<think>',
+    removeThoughtsClose: '</think>',
     removeCharactersEnabled: false,
     removeCharactersChars: '',
     fixNewlinesEnabled: false,
-	excludeBracketEnabled: false,
+    excludeBracketEnabled: false,
 };
 
 // Blank characters: ordinary whitespace (includes U+0020) plus the
@@ -217,7 +219,16 @@ async function postProcess(messageText, messageObj) {
 
         let text = messageText;
 
-        // 0. Set aside the first [...] block so it is never touched
+        // 0. Remove thoughts first, before anything else touches the text
+        if (extension_settings[extensionName].removeThoughtsEnabled) {
+            text = removethoughts(
+                text,
+                extension_settings[extensionName].removeThoughtsOpen,
+                extension_settings[extensionName].removeThoughtsClose
+            );
+        }
+
+        // 1. Set aside the first [...] block so it is never touched
         let head = '';
         let sep = '';
         if (extension_settings[extensionName].excludeBracketEnabled) {
@@ -227,11 +238,6 @@ async function postProcess(messageText, messageObj) {
                 sep = parts.sep;
                 text = parts.body;
             }
-        }
-
-        // 1. Remove thoughts first
-        if (extension_settings[extensionName].removeThoughtsEnabled) {
-            text = removethoughts(text);
         }
 
         // 2. Fix line breaks and speaker boundaries second
@@ -277,24 +283,24 @@ function splitLeadingBracket(text) {
     return { head, sep, body: rest.slice(sep.length) };
 }
 
-function removethoughts(text) {
-    const lines = text.split(/\r?\n/);
-    let cutIndex = -1;
+function removethoughts(text, open, close) {
+    open = (open ?? '').trim() || '<think>';
+    close = (close ?? '').trim() || '</think>';
 
-    for (let i = 0; i < lines.length; i++) {
-        // \p{S} already covers U+2800 (Symbol, other); \s covers U+0020.
-        const cleaned = lines[i].replace(/^[\s\u2800\p{P}\p{S}]+/u, "");
-        if (/^[\u0980-\u09FF]/u.test(cleaned)) {
-            cutIndex = i;
-            break;
-        }
+    const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let out = String(text);
+
+    // Remove every complete open...close pair (multi-line, non-greedy)
+    out = out.replace(new RegExp(`${esc(open)}[\\s\\S]*?${esc(close)}`, 'g'), '');
+
+    // Closing wrapper with no opener (some APIs strip the opening tag):
+    // drop everything up to and including the last stray closer
+    const lastClose = out.lastIndexOf(close);
+    if (lastClose !== -1) {
+        out = out.slice(lastClose + close.length);
     }
 
-    if (cutIndex === -1){
-        return text;
-    }
-
-    return lines.slice(cutIndex).join("\n").replace(/\*/g, "");
+    return trimBlank(out);
 }
 
 function removecharacters(text, charsCsv) {
@@ -494,6 +500,12 @@ async function loadSettings() {
     if (typeof extension_settings[extensionName].postProcessingEnabled === 'undefined') {
         extension_settings[extensionName].postProcessingEnabled = $('#postprocessing-toggle').is(':checked');
     }
+    if (typeof extension_settings[extensionName].removeThoughtsOpen === 'undefined') {
+        extension_settings[extensionName].removeThoughtsOpen = '<think>';
+    }
+    if (typeof extension_settings[extensionName].removeThoughtsClose === 'undefined') {
+        extension_settings[extensionName].removeThoughtsClose = '</think>';
+    }
 
     $('#autoquote-toggle').prop('checked', extension_settings[extensionName].enabled);
     $('#asterisk-toggle').prop('checked', extension_settings[extensionName].asteriskEnabled);
@@ -560,6 +572,22 @@ async function loadSettings() {
         $('#remove-thoughts-toggle').prop('checked', extension_settings[extensionName].removeThoughtsEnabled);
         $('#remove-thoughts-toggle').on('change', function () {
             extension_settings[extensionName].removeThoughtsEnabled = $(this).is(':checked');
+            saveSettingsDebounced();
+        });
+    }
+	
+    if ($('#remove-thoughts-open').length) {
+        $('#remove-thoughts-open').val(extension_settings[extensionName].removeThoughtsOpen);
+        $('#remove-thoughts-open').on('input change', function () {
+            extension_settings[extensionName].removeThoughtsOpen = $(this).val();
+            saveSettingsDebounced();
+        });
+    }
+
+    if ($('#remove-thoughts-close').length) {
+        $('#remove-thoughts-close').val(extension_settings[extensionName].removeThoughtsClose);
+        $('#remove-thoughts-close').on('input change', function () {
+            extension_settings[extensionName].removeThoughtsClose = $(this).val();
             saveSettingsDebounced();
         });
     }
